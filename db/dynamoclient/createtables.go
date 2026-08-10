@@ -37,16 +37,21 @@ func (d *DynamoClient) tableExists(table string) bool {
 }
 
 func (d *DynamoClient) createTable(table string) {
-	read, write := int64(5), int64(5)
 	keys := TableKeys[table]
 	attrs := TableAttributes[table]
 	streamSpec := TableStreamSpecs[table]
 	_, err := d.client.CreateTable(context.Background(), &dynamodb.CreateTableInput{
-		TableName:             &table,
-		KeySchema:             keys,
-		AttributeDefinitions:  attrs,
-		ProvisionedThroughput: &types.ProvisionedThroughput{ReadCapacityUnits: &read, WriteCapacityUnits: &write},
-		StreamSpecification:   &streamSpec})
+		TableName:            &table,
+		KeySchema:            keys,
+		AttributeDefinitions: attrs,
+		// On-demand billing avoids needing to size provisioned capacity per
+		// table. With 6 tables, provisioned mode at even the smallest useful
+		// capacity (5 RCU/5 WCU each = 30/30 total) exceeds DynamoDB's
+		// always-free tier of 25 RCU + 25 WCU combined per account/region,
+		// which would incur a small ongoing charge. This app's traffic is low
+		// enough that on-demand costs fractions of a cent per month.
+		BillingMode:         types.BillingModePayPerRequest,
+		StreamSpecification: &streamSpec})
 	if err != nil {
 		glog.Fatalf("Failed to create table %s %v", table, err)
 	}
