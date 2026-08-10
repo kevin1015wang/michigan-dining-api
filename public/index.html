@@ -73,19 +73,22 @@
             <section>
                 <h2>About</h2>
                 <p>
-                    Data is scraped from the University of Michigan's MDining API, formatted and stored in a database to
-                    be served.
-                    This allows for data structures and formats that are easier to work with than the original API and
+                    Data is scraped daily from the <a href="https://dining.umich.edu/menus-locations/" target="_blank"
+                        rel="noopener noreferrer">dining.umich.edu</a> menu pages, formatted and stored in a database
+                    to be served.
+                    This allows for data structures and formats that are easier to work with than the raw site, and
                     for historical
-                    data to be retrieved past what the MDining API offers (2019-11-02 is the earliest date available
-                    through this service).
+                    data to be retrieved further back than the site itself keeps around (2019-11-02 is the earliest
+                    date available through this service).
                     Check out <a href="https://tendiesti.me/stats">the MDining statistics page of tendies time</a> for
                     examples of using
                     this historical data.
                 </p>
                 <p>
-                    The project is located on github <a href="https://github.com/anders617/michigan-dining-api"
-                        target="_blank" rel="noopener noreferrer">here</a>.
+                    The project is located on github <a href="https://github.com/kevin1015wang/michigan-dining-api"
+                        target="_blank" rel="noopener noreferrer">here</a>, forked from the original by <a
+                        href="https://github.com/anders617/michigan-dining-api" target="_blank"
+                        rel="noopener noreferrer">Anders Boberg</a>.
                     </br>
                     Currently this is used to support <a href="https://tendiesti.me" target="_blank"
                         rel="noopener noreferrer">tendiesti.me</a>.
@@ -94,9 +97,9 @@
                         rel="noopener noreferrer">grpc</a>, <a href="https://github.com/grpc/grpc-web" target="_blank"
                         rel="noopener noreferrer">grpc-web</a>, or a REST API.
                     </br>
-                    To access the API through grpc and grpc-web, use the proto service defininitions in <a
-                        href="https://github.com/anders617/mdining-proto" target="_blank"
-                        rel="noopener noreferrer">mdining-proto</a>.
+                    To access the API through grpc and grpc-web, use the proto service definitions in <a
+                        href="https://github.com/kevin1015wang/michigan-dining-api/tree/master/proto" target="_blank"
+                        rel="noopener noreferrer">proto/</a>.
                 </p>
             </section>
             <section>
@@ -111,8 +114,8 @@
                 <h2>REST Endpoints</h2>
                 <p>
                     REST Endpoints still return data according to the service definitions in <a
-                        href="https://github.com/anders617/mdining-proto" target="_blank"
-                        rel="noopener noreferrer">mdining-proto</a>, but the responses will be serialized in JSON
+                        href="https://github.com/kevin1015wang/michigan-dining-api/tree/master/proto" target="_blank"
+                        rel="noopener noreferrer">proto/</a>, but the responses will be serialized in JSON
                     instead of binary protobuf formats.
                     </br>
                     </br>
@@ -127,8 +130,10 @@
                     <li>
                         <a href="/v1/diningHalls">/v1/diningHalls</a>
                         <p>
-                            Provides an array of U of M dining halls(including cafes and markets) locations and relevant
-                            information such as address.
+                            Provides an array of U of M dining halls (including cafes and markets), each with a
+                            <code>name</code> and the <code>campus</code> group it belongs to (<code>DINING
+                                HALLS</code>, <code>CAFES</code>, or <code>MARKETS</code>). Use the exact
+                            <code>name</code> values from this endpoint when querying <code>/v1/menus</code> below.
                         </p>
                     </li>
                     <li>
@@ -147,19 +152,31 @@
                     </li>
                     <li>
                         <a
-                            href="/v1/menus?date=2019-11-04&diningHall=Bursley%20Dining%20Hall&meal=LUNCH">/v1/menus?date={yyyy-MM-dd}&diningHall={DINING_HALL}&meal={MEAL}</a>
+                            href="/v1/menus?date=2026-08-10&diningHall=Bursley&meal=Lunch">/v1/menus?date={yyyy-MM-dd}&diningHall={DINING_HALL}&meal={MEAL}</a>
                         <p>
-                            Provides the full menu for the given date, dining hall and meal. If one or more arguments is
-                            permitted then all relevant menus are returned. This includes nutrition information for menu
-                            items.
+                            Provides the full menu for the given date, dining hall and meal, including nutrition
+                            information for menu items. <code>date</code> is required; <code>diningHall</code> and
+                            <code>meal</code> are optional and, if omitted, all matching menus are returned instead
+                            of just one.
+                            </br>
+                            </br>
+                            <code>diningHall</code> and <code>meal</code> are exact, case-sensitive matches against
+                            the <code>name</code> values from <code>/v1/diningHalls</code> (e.g.
+                            <code>Bursley</code>, not <code>Bursley Dining Hall</code>) and the <code>meal</code>
+                            values from this same endpoint (e.g. <code>Breakfast</code>, <code>Lunch</code>,
+                            <code>Dinner</code> — title case, not <code>LUNCH</code>). A misspelled or wrong-case
+                            value currently returns a single menu with every field blank rather than an error, so
+                            double-check casing against a live response if you get an empty-looking result.
                         </p>
                     </li>
                     <li>
                         <a
-                            href="/v1/foods?name=chicken%20tenders&date=2019-11-08&meal=DINNER">/v1/foods?name={LOWERCASE_FOOD_NAME}&date={yyyy-MM-dd}&meal={MEAL}</a>
+                            href="/v1/foods?name=chicken%20tenders&date=2019-11-08">/v1/foods?name={LOWERCASE_FOOD_NAME}&date={yyyy-MM-dd}</a>
                         <p>
-                            Provides information on where the given food is being served on the given date and meal.
-                            Includes nutrition info.
+                            Provides information on where the given food is being served on the given date (or, in
+                            place of <code>date</code>, a <code>startDate</code>/<code>endDate</code> range).
+                            Includes nutrition info. <code>name</code> is matched lowercase, exactly as returned
+                            elsewhere in lowercase form.
                         </p>
                     </li>
                     <li>
@@ -192,7 +209,7 @@
     <footer>
         <p>
             Problems? Want to contribute? Create an issue on the
-            <a href="https://github.com/anders617/michigan-dining-api" target="_blank"
+            <a href="https://github.com/kevin1015wang/michigan-dining-api" target="_blank"
                 rel="noopener noreferrer">github</a> page.
         </p>
         <p>
