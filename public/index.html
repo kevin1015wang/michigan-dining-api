@@ -131,9 +131,11 @@
                         <a href="/v1/diningHalls">/v1/diningHalls</a>
                         <p>
                             Provides an array of U of M dining halls (including cafes and markets), each with a
-                            <code>name</code> and the <code>campus</code> group it belongs to (<code>DINING
-                                HALLS</code>, <code>CAFES</code>, or <code>MARKETS</code>). Use the exact
-                            <code>name</code> values from this endpoint when querying <code>/v1/menus</code> below.
+                            <code>name</code>, the <code>campus</code> group it belongs to (<code>DINING
+                                HALLS</code>, <code>CAFES</code>, or <code>MARKETS</code>), and up to 7 days of
+                            operating hours in <code>dayHours</code> (today through 6 days out, one entry per date
+                            actually open). Use the exact <code>name</code> values from this endpoint when querying
+                            <code>/v1/menus</code> below.
                         </p>
                     </li>
                     <li>

@@ -100,8 +100,17 @@ func (s *Scraper) Close() {
 	}
 }
 
-// FetchAll scrapes every location in Locations and returns today's dining
-// halls (name + group) and today's menus (one per location per meal period).
+// numDaysToFetch is how many days ahead (including today) each location is
+// scraped for. Each location page takes a ?menuDate=yyyy-MM-dd query param
+// that renders that date's hours and menu (the same content the site's own
+// calendar widget navigates to when you click a date), so this isn't
+// limited to what's visible in the calendar's current month view.
+const numDaysToFetch = 7
+
+// FetchAll scrapes every location in Locations for the next numDaysToFetch
+// days and returns each location's dining hall info (name, group, and one
+// DayHour per day scraped) plus every day's menus (one per location per
+// meal period per day).
 func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 	context, err := s.browser.NewContext(playwright.BrowserNewContextOptions{
 		UserAgent: playwright.String(userAgent),
@@ -115,40 +124,50 @@ func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 		return nil, nil, fmt.Errorf("could not open page: %w", err)
 	}
 
-	today := date.FormatNoTime(date.Now())
-	formattedToday := date.Now().Format("Monday, January 2, 2006")
+	dates := make([]time.Time, numDaysToFetch)
+	for i := range dates {
+		dates[i] = date.Now().AddDate(0, 0, i)
+	}
 
 	diningHalls := &pb.DiningHalls{}
 	menus := []*pb.Menu{}
 
 	for i, loc := range Locations {
-		url := baseURL + loc.URLPath + "/"
-		doc, err := fetchDoc(page, url)
-		if err != nil {
-			glog.Errorf("Giving up on %s: %s", url, err)
-			continue
+		var name string
+		dayHours := []*pb.DiningHall_DayHour{}
+
+		for d, day := range dates {
+			dateStr := date.FormatNoTime(day)
+			formattedDate := day.Format("Monday, January 2, 2006")
+			url := baseURL + loc.URLPath + "/?menuDate=" + dateStr
+
+			doc, err := fetchDoc(page, url)
+			if err != nil {
+				glog.Errorf("Giving up on %s: %s", url, err)
+			} else if pageName := strings.TrimSpace(strings.SplitN(doc.Find("title").First().Text(), "|", 2)[0]); pageName == "" {
+				glog.Warningf("Could not determine location name for %s, skipping this date", url)
+			} else {
+				name = pageName
+				dayHours = append(dayHours, parseDayHours(doc, dateStr)...)
+				menus = append(menus, parseMenus(doc, pageName, loc.Group, dateStr, formattedDate)...)
+			}
+
+			// Wait between requests so the fetch job behaves like a normal, slow
+			// visitor rather than a scraping burst.
+			if i < len(Locations)-1 || d < len(dates)-1 {
+				time.Sleep(time.Duration(1500+rand.Intn(2000)) * time.Millisecond)
+			}
 		}
 
-		name := strings.TrimSpace(strings.SplitN(doc.Find("title").First().Text(), "|", 2)[0])
 		if name == "" {
-			glog.Warningf("Could not determine location name for %s, skipping", url)
+			glog.Warningf("Could not determine location name for %s, skipping", loc.URLPath)
 			continue
 		}
-
 		diningHalls.DiningHalls = append(diningHalls.DiningHalls, &pb.DiningHall{
 			Name:     name,
 			Campus:   loc.Group,
-			DayHours: parseDayHours(doc, today),
+			DayHours: dayHours,
 		})
-
-		locationMenus := parseMenus(doc, name, loc.Group, today, formattedToday)
-		menus = append(menus, locationMenus...)
-
-		// Wait between requests so the fetch job behaves like a normal, slow
-		// visitor rather than a scraping burst.
-		if i < len(Locations)-1 {
-			time.Sleep(time.Duration(1500+rand.Intn(2000)) * time.Millisecond)
-		}
 	}
 
 	return diningHalls, menus, nil

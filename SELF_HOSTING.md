@@ -95,8 +95,9 @@ service - so run it once now to seed data:
 docker compose run --rm fetch
 ```
 
-This takes 1-2 minutes (it visits ~25 location pages with a polite delay
-between each, on purpose, to look like a normal slow visitor rather than a
+This takes roughly 10 minutes (it visits ~25 locations x 7 days = ~175 pages,
+via each location's `?menuDate=` query param, with a polite delay between
+each request on purpose, to look like a normal slow visitor rather than a
 scraping burst).
 
 Then schedule it daily via the host's crontab (`crontab -e`):
@@ -121,11 +122,13 @@ Then schedule it daily via the host's crontab (`crontab -e`):
 - **Real-time occupancy/capacity data is gone.** That came from an internal
   UMich feed (`mdiningapi2`'s capacity endpoint) that was never public and
   isn't recoverable by scraping the public site.
-- **`dayHours` only ever has (at most) one entry, keyed by the scrape date.**
-  Each location page only renders its own "Today's Hours" box, not a full
-  week - there's no way to scrape hours for days other than the one `fetch`
-  runs on. A closed location (e.g. a hall not open for the summer) has no
-  hours box at all, so it gets an empty `dayHours` list rather than an entry
-  saying "closed".
+- **`dayHours` has one entry per day scraped (`numDaysToFetch` = 7 in
+  `mdiningscraper.go`), keyed by date.** Each location page's hours box only
+  ever shows the hours for whatever date is in its `?menuDate=` query param
+  (default: today) - `fetch` requests that param once per day in the lookahead
+  window rather than trying to find a full week on one page load. A closed
+  location (e.g. a hall not open for the summer) has no hours box for that
+  date, so that date is simply missing from `dayHours` rather than getting an
+  entry saying "closed".
 - The `cmd/scrape` binary and `mdiningclient`/`mdiningclient2` packages are
   the old, now-dead API clients, left in place for reference but unused.
