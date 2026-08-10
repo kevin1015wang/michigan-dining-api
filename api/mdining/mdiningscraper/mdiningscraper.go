@@ -136,8 +136,9 @@ func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 		}
 
 		diningHalls.DiningHalls = append(diningHalls.DiningHalls, &pb.DiningHall{
-			Name:   name,
-			Campus: loc.Group,
+			Name:     name,
+			Campus:   loc.Group,
+			DayHours: parseDayHours(doc, today),
 		})
 
 		locationMenus := parseMenus(doc, name, loc.Group, today, formattedToday)
@@ -196,6 +197,36 @@ func fetchDoc(page playwright.Page, url string) (*goquery.Document, error) {
 		return doc, nil
 	}
 	return nil, lastErr
+}
+
+// hoursTextReplacer normalizes the non-breaking spaces and non-breaking
+// hyphen the site renders times with (e.g. "11:30 am ‑ 1:00 pm")
+// into plain ASCII.
+var hoursTextReplacer = strings.NewReplacer(" ", " ", "‑", "-")
+
+// parseDayHours scrapes the "Today's Hours" box on a location page. The site
+// only ever renders hours for the day it's currently showing, so this
+// returns at most one DayHour (keyed by date) listing each serving
+// period/time range found; a closed location has no calhours entries and
+// yields none.
+func parseDayHours(doc *goquery.Document, date string) []*pb.DiningHall_DayHour {
+	hours := []string{}
+	doc.Find(".hours-content .calhours > li").Each(func(_ int, li *goquery.Selection) {
+		title := strings.TrimSpace(li.Find(".calhours-title").First().Text())
+		times := strings.TrimSpace(hoursTextReplacer.Replace(li.Find(".calhours-times").First().Text()))
+		if title == "" && times == "" {
+			return
+		}
+		if times == "" {
+			hours = append(hours, title)
+		} else {
+			hours = append(hours, title+": "+times)
+		}
+	})
+	if len(hours) == 0 {
+		return nil
+	}
+	return []*pb.DiningHall_DayHour{{Key: date, Hour: hours}}
 }
 
 func parseMenus(doc *goquery.Document, diningHallName string, group string, date string, formattedDate string) []*pb.Menu {

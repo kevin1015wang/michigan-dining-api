@@ -121,5 +121,11 @@ Then schedule it daily via the host's crontab (`crontab -e`):
 - **Real-time occupancy/capacity data is gone.** That came from an internal
   UMich feed (`mdiningapi2`'s capacity endpoint) that was never public and
   isn't recoverable by scraping the public site.
+- **`dayHours` only ever has (at most) one entry, keyed by the scrape date.**
+  Each location page only renders its own "Today's Hours" box, not a full
+  week - there's no way to scrape hours for days other than the one `fetch`
+  runs on. A closed location (e.g. a hall not open for the summer) has no
+  hours box at all, so it gets an empty `dayHours` list rather than an entry
+  saying "closed".
 - The `cmd/scrape` binary and `mdiningclient`/`mdiningclient2` packages are
   the old, now-dead API clients, left in place for reference but unused.
