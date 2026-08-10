@@ -11,12 +11,14 @@ import (
 func (d *DynamoClient) CreateTablesIfNotExists() {
 	glog.Info("Checking for existence of dynamodb tables...")
 	for _, table := range TableNames {
-		if !d.tableExists(table) {
+		desc, err := d.describeTable(table)
+		if err != nil {
 			glog.Infof("Table %s does not exist. Creating now...", table)
 			d.createTable(table)
-		} else {
-			glog.Infof("Table %s exists.", table)
+			continue
 		}
+		glog.Infof("Table %s exists.", table)
+		d.ensureOnDemandBilling(table, desc)
 	}
 }
 
@@ -30,10 +32,31 @@ func (d *DynamoClient) CreateTables() error {
 	return nil
 }
 
-func (d *DynamoClient) tableExists(table string) bool {
-	_, err := d.client.DescribeTable(context.Background(), &dynamodb.DescribeTableInput{
+func (d *DynamoClient) describeTable(table string) (*types.TableDescription, error) {
+	out, err := d.client.DescribeTable(context.Background(), &dynamodb.DescribeTableInput{
 		TableName: &table})
-	return err == nil
+	if err != nil {
+		return nil, err
+	}
+	return out.Table, nil
+}
+
+// ensureOnDemandBilling migrates a table that was created before this app
+// switched to on-demand billing (see createTable) off whatever small fixed
+// capacity it originally got provisioned with. A table stuck on a leftover
+// 1 RCU/1 WCU can throttle hard under any write burst bigger than what it
+// was sized for, silently dropping writes that exhaust their retries.
+func (d *DynamoClient) ensureOnDemandBilling(table string, desc *types.TableDescription) {
+	if desc.BillingModeSummary != nil && desc.BillingModeSummary.BillingMode == types.BillingModePayPerRequest {
+		return
+	}
+	glog.Infof("Table %s is not on on-demand billing, switching it now...", table)
+	_, err := d.client.UpdateTable(context.Background(), &dynamodb.UpdateTableInput{
+		TableName:   &table,
+		BillingMode: types.BillingModePayPerRequest})
+	if err != nil {
+		glog.Errorf("Failed to switch table %s to on-demand billing: %v", table, err)
+	}
 }
 
 func (d *DynamoClient) createTable(table string) {
