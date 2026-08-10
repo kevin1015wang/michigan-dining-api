@@ -10,4 +10,4 @@ COPY --from=builder /out/web /web
 COPY public /public
 WORKDIR /
 EXPOSE 8081
-ENTRYPOINT ["/web", "--alsologtostderr"]
+ENTRYPOINT ["/web", "--logtostderr"]
