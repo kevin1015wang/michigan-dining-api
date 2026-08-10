@@ -14,13 +14,15 @@
 # VSCode
 .vscode/
 
-# Ignore files named web (exectuable), but not the web directory
-*web
-!*web/
-
-# Ignore files named fetch (exectuable), but not the fetch directory
-*fetch
-!*fetch/
+# Ignore compiled binaries produced by `go build ./cmd/...`, but not the db/
+# source directory
+/web
+/fetch
+/scrape
+/analyze
+/db
+!/db/
+/client
 
 # Ignore bazel output directories
 bazel-*

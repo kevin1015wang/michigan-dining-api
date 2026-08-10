@@ -3,8 +3,8 @@ package dynamoclient
 import (
 	"context"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/golang/glog"
 )
 
@@ -31,24 +31,22 @@ func (d *DynamoClient) CreateTables() error {
 }
 
 func (d *DynamoClient) tableExists(table string) bool {
-	describeReq := d.client.DescribeTableRequest(&dynamodb.DescribeTableInput{
-		TableName: aws.String(table)})
-	_, err := describeReq.Send(context.Background())
+	_, err := d.client.DescribeTable(context.Background(), &dynamodb.DescribeTableInput{
+		TableName: &table})
 	return err == nil
 }
 
 func (d *DynamoClient) createTable(table string) {
 	read, write := int64(5), int64(5)
-	keys, _ := TableKeys[table]
-	attrs, _ := TableAttributes[table]
-	streamSpec, _ := TableStreamSpecs[table]
-	createReq := d.client.CreateTableRequest(&dynamodb.CreateTableInput{
+	keys := TableKeys[table]
+	attrs := TableAttributes[table]
+	streamSpec := TableStreamSpecs[table]
+	_, err := d.client.CreateTable(context.Background(), &dynamodb.CreateTableInput{
 		TableName:             &table,
 		KeySchema:             keys,
 		AttributeDefinitions:  attrs,
-		ProvisionedThroughput: &dynamodb.ProvisionedThroughput{ReadCapacityUnits: &read, WriteCapacityUnits: &write},
+		ProvisionedThroughput: &types.ProvisionedThroughput{ReadCapacityUnits: &read, WriteCapacityUnits: &write},
 		StreamSpecification:   &streamSpec})
-	_, err := createReq.Send(context.Background())
 	if err != nil {
 		glog.Fatalf("Failed to create table %s %v", table, err)
 	}

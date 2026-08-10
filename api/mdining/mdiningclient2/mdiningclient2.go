@@ -14,8 +14,8 @@ import (
 	"github.com/golang/protobuf/proto"
 
 	"github.com/MichiganDiningAPI/internal/util/date"
-	pb "github.com/anders617/mdining-proto/proto/mdining"
-	"github.com/anders617/mdining-proto/proto/mdiningapi2"
+	pb "github.com/MichiganDiningAPI/proto/mdining"
+	"github.com/MichiganDiningAPI/proto/mdiningapi2"
 )
 
 const (

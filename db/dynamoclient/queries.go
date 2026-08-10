@@ -4,28 +4,28 @@ import (
 	"context"
 	"errors"
 
-	pb "github.com/anders617/mdining-proto/proto/mdining"
-	"github.com/aws/aws-sdk-go-v2/aws"
+	pb "github.com/MichiganDiningAPI/proto/mdining"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/dynamodbattribute"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/expression"
 	"github.com/golang/glog"
 )
 
 func (d *DynamoClient) QueryFoodStats() (*[]*pb.FoodStat, error) {
 	params := &dynamodb.ScanInput{
-		TableName: aws.String(FoodStatsTableName),
+		TableName: &FoodStatsTableName,
 	}
 
-	req := d.client.ScanRequest(params)
-	p := dynamodb.NewScanPaginator(req)
+	p := dynamodb.NewScanPaginator(d.client, params)
 
 	foodStats := make([]*pb.FoodStat, 0)
-	for p.Next(context.Background()) {
-		page := p.CurrentPage()
+	for p.HasMorePages() {
+		page, err := p.NextPage(context.Background())
+		if err != nil {
+			return nil, err
+		}
 		for _, item := range page.Items {
 			stat := pb.FoodStat{}
-			err := dynamodbattribute.UnmarshalMap(item, &stat)
+			err := unmarshalMap(item, &stat)
 			if err != nil {
 				return nil, err
 			}
@@ -45,7 +45,7 @@ func (d *DynamoClient) ForEachFood(startDate *string, endDate *string, fn func(*
 		filter = expression.Name("date").LessThanEqual(expression.Value(*endDate))
 	}
 	params := &dynamodb.ScanInput{
-		TableName: aws.String(FoodTableName),
+		TableName: &FoodTableName,
 	}
 	if startDate != nil || endDate != nil {
 		glog.Info(*startDate)
@@ -54,38 +54,36 @@ func (d *DynamoClient) ForEachFood(startDate *string, endDate *string, fn func(*
 		params.ExpressionAttributeNames = expr.Names()
 		params.ExpressionAttributeValues = expr.Values()
 	}
-	req := d.client.ScanRequest(params)
-	p := dynamodb.NewScanPaginator(req)
+	p := dynamodb.NewScanPaginator(d.client, params)
 
-	for p.Next(context.Background()) {
-		page := p.CurrentPage()
+	for p.HasMorePages() {
+		page, err := p.NextPage(context.Background())
+		if err != nil {
+			return err
+		}
 		for _, item := range page.Items {
 			food := pb.Food{}
-			dynamodbattribute.UnmarshalMap(item, &food)
+			unmarshalMap(item, &food)
 			fn(&food)
 		}
 	}
 
-	if err := p.Err(); err != nil {
-		return err
-	}
 	return nil
 }
 
 func (d *DynamoClient) QueryDiningHalls() (*pb.DiningHalls, error) {
 	params := &dynamodb.ScanInput{
-		TableName: aws.String(DiningHallsTableName),
+		TableName: &DiningHallsTableName,
 	}
 	// Make the DynamoDB Query API call
-	req := d.client.ScanRequest(params)
-	result, err := req.Send(context.Background())
+	result, err := d.client.Scan(context.Background(), params)
 	if err != nil {
 		return nil, err
 	}
 	diningHalls := pb.DiningHalls{}
 	for _, i := range result.Items {
 		dh := pb.DiningHall{}
-		dynamodbattribute.UnmarshalMap(i, &dh)
+		unmarshalMap(i, &dh)
 		diningHalls.DiningHalls = append(diningHalls.DiningHalls, &dh)
 	}
 	return &diningHalls, nil
@@ -108,7 +106,7 @@ func (d *DynamoClient) QueryFoodsDateRange(name *string, startDate *string, endD
 			KeyConditionExpression:    expr.KeyCondition(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
-			TableName:                 aws.String(FoodTableName),
+			TableName:                 &FoodTableName,
 		}
 		return d.queryFoods(params)
 	}
@@ -140,7 +138,7 @@ func (d *DynamoClient) QueryFoods(name *string, date *string) (*[]*pb.Food, erro
 			KeyConditionExpression:    expr.KeyCondition(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
-			TableName:                 aws.String(FoodTableName),
+			TableName:                 &FoodTableName,
 		}
 		return d.queryFoods(params)
 	}
@@ -148,15 +146,14 @@ func (d *DynamoClient) QueryFoods(name *string, date *string) (*[]*pb.Food, erro
 }
 
 func (d *DynamoClient) queryFoods(params *dynamodb.QueryInput) (*[]*pb.Food, error) {
-	req := d.client.QueryRequest(params)
-	result, err := req.Send(context.Background())
+	result, err := d.client.Query(context.Background(), params)
 	if err != nil {
 		return nil, err
 	}
 	foods := make([]*pb.Food, len(result.Items))
 	for idx, item := range result.Items {
 		food := pb.Food{}
-		dynamodbattribute.UnmarshalMap(item, &food)
+		unmarshalMap(item, &food)
 		foods[idx] = &food
 	}
 	return &foods, nil
@@ -185,7 +182,7 @@ func (d *DynamoClient) QueryMenus(diningHallName *string, date *string, meal *st
 			KeyConditionExpression:    expr.KeyCondition(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
-			TableName:                 aws.String(MenuTableName),
+			TableName:                 &MenuTableName,
 		}
 		return d.queryMenus(params)
 	}
@@ -199,7 +196,7 @@ func (d *DynamoClient) QueryMenus(diningHallName *string, date *string, meal *st
 			FilterExpression:          expr.Filter(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
-			TableName:                 aws.String(MenuTableName),
+			TableName:                 &MenuTableName,
 		}
 		return d.queryMenus(params)
 	}
@@ -209,15 +206,14 @@ func (d *DynamoClient) QueryMenus(diningHallName *string, date *string, meal *st
 
 // Execute a query with the given parameters and marshal the output into a slice of *pb.Menu
 func (d *DynamoClient) queryMenus(params *dynamodb.QueryInput) (*[]*pb.Menu, error) {
-	req := d.client.QueryRequest(params)
-	result, err := req.Send(context.Background())
+	result, err := d.client.Query(context.Background(), params)
 	if err != nil {
 		return nil, err
 	}
 	menus := make([]*pb.Menu, len(result.Items))
 	for idx, item := range result.Items {
 		menu := pb.Menu{}
-		dynamodbattribute.UnmarshalMap(item, &menu)
+		unmarshalMap(item, &menu)
 		menus[idx] = &menu
 	}
 	return &menus, nil

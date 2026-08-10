@@ -13,12 +13,13 @@ import (
 	"github.com/MichiganDiningAPI/api/analytics/analyticsclient"
 	"github.com/MichiganDiningAPI/internal/web/mdiningserver"
 	"github.com/MichiganDiningAPI/internal/web/ratelimiter"
-	pb "github.com/anders617/mdining-proto/proto/mdining"
+	pb "github.com/MichiganDiningAPI/proto/mdining"
 	"github.com/golang/glog"
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/improbable-eng/grpc-web/go/grpcweb"
 	"github.com/soheilhy/cmux"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 //
@@ -112,7 +113,7 @@ func main() {
 	// HTTP
 	mux := runtime.NewServeMux()
 
-	opts := []grpc.DialOption{grpc.WithInsecure()}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

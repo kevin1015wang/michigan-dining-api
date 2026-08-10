@@ -1,0 +1,39 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      - PORT=8081
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+
+  # Not started by `docker compose up`. Run daily via cron on the host, e.g.:
+  #   0 6 * * * cd /path/to/michigan-dining-api && docker compose run --rm fetch
+  fetch:
+    build:
+      context: .
+      dockerfile: Dockerfile.fetch
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:

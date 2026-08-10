@@ -7,10 +7,11 @@ import (
 	"os"
 	"time"
 
-	pb "github.com/anders617/mdining-proto/proto/mdining"
+	pb "github.com/MichiganDiningAPI/proto/mdining"
 	"github.com/golang/glog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 //
@@ -22,7 +23,7 @@ func main() {
 	useCredentials := flag.Bool("use_credentials", false, "Whether to use tls credentials or not when connecting to the server.")
 	flag.Parse()
 	glog.Infof("Connecting...")
-	credentialOpt := grpc.WithInsecure()
+	credentialOpt := grpc.WithTransportCredentials(insecure.NewCredentials())
 	if *useCredentials {
 		credentialOpt = grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, ""))
 	}

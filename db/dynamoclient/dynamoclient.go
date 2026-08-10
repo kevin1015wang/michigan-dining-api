@@ -5,12 +5,11 @@ import (
 	"math"
 	"reflect"
 
-	pb "github.com/anders617/mdining-proto/proto/mdining"
-	"github.com/aws/aws-sdk-go-v2/aws/endpoints"
-	"github.com/aws/aws-sdk-go-v2/aws/external"
+	pb "github.com/MichiganDiningAPI/proto/mdining"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/dynamodbattribute"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/expression"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
 	"github.com/golang/glog"
 	"github.com/golang/protobuf/proto"
@@ -26,49 +25,45 @@ func New() *DynamoClient {
 	// Using the SDK's default configuration, loading additional config
 	// and credentials values from the environment variables, shared
 	// credentials, and shared configuration files
-	cfg, err := external.LoadDefaultAWSConfig()
+	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion("us-east-1"))
 	if err != nil {
-		glog.Fatalf("Unable to load SDK config, %v" + err.Error())
+		glog.Fatalf("Unable to load SDK config, %v", err)
 	}
-	// TODO: Make this configurable
-	cfg.Region = endpoints.UsEast1RegionID
-	dc.client = dynamodb.New(cfg)
-	dc.streamClient = dynamodbstreams.New(cfg)
+	dc.client = dynamodb.NewFromConfig(cfg)
+	dc.streamClient = dynamodbstreams.NewFromConfig(cfg)
 	return dc
 }
 
 func (d *DynamoClient) GetHearts(keys []string) (*[]*pb.HeartCount, error) {
-	paramKeys := []map[string]dynamodb.AttributeValue{}
+	paramKeys := []map[string]types.AttributeValue{}
 	for _, key := range keys {
-		attributeValue, err := dynamodbattribute.Marshal(&key)
+		attributeValue, err := marshal(key)
 		if err != nil {
 			return nil, err
 		}
-		attributeKey := map[string]dynamodb.AttributeValue{
-			HeartsTableKey: *attributeValue,
+		attributeKey := map[string]types.AttributeValue{
+			HeartsTableKey: attributeValue,
 		}
 		paramKeys = append(paramKeys, attributeKey)
 	}
 	params := dynamodb.BatchGetItemInput{
-		RequestItems: map[string]dynamodb.KeysAndAttributes{
-			HeartsTableName: dynamodb.KeysAndAttributes{
-				Keys: paramKeys}}}
-	req := d.client.BatchGetItemRequest(&params)
+		RequestItems: map[string]types.KeysAndAttributes{
+			HeartsTableName: {Keys: paramKeys}}}
 
-	resp, err := req.Send(context.Background())
+	resp, err := d.client.BatchGetItem(context.Background(), &params)
 	if err != nil {
 		return nil, err
 	}
 	heartCounts := []*pb.HeartCount{}
 	for _, item := range resp.Responses[HeartsTableName] {
 		heartCount := pb.HeartCount{}
-		err = dynamodbattribute.UnmarshalMap(item, &heartCount)
+		err = unmarshalMap(item, &heartCount)
 		heartCounts = append(heartCounts, &heartCount)
 	}
 	for _, key := range resp.UnprocessedKeys[HeartsTableName].Keys {
 		keyAttribute := key[HeartsTableKey]
-		keyValue := ""
-		err := dynamodbattribute.Unmarshal(&keyAttribute, keyValue)
+		var keyValue string
+		err := unmarshal(keyAttribute, &keyValue)
 		if err != nil {
 			continue
 		}
@@ -81,26 +76,24 @@ func (d *DynamoClient) GetHearts(keys []string) (*[]*pb.HeartCount, error) {
 func (d *DynamoClient) AddHeart(key string) (*pb.HeartCount, error) {
 	updateExpression := expression.Add(expression.Name("count"), expression.Value(1))
 	expr, _ := expression.NewBuilder().WithUpdate(updateExpression).Build()
-	dynamoKey, err := dynamodbattribute.Marshal(&key)
+	dynamoKey, err := marshal(key)
 	if err != nil {
 		return nil, err
 	}
 	params := dynamodb.UpdateItemInput{
 		TableName:                 &HeartsTableName,
-		Key:                       map[string]dynamodb.AttributeValue{HeartsTableKey: *dynamoKey},
+		Key:                       map[string]types.AttributeValue{HeartsTableKey: dynamoKey},
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		UpdateExpression:          expr.Update(),
-		ReturnValues:              dynamodb.ReturnValueAllNew,
+		ReturnValues:              types.ReturnValueAllNew,
 	}
-	req := d.client.UpdateItemRequest(&params)
-
-	resp, err := req.Send(context.Background())
+	resp, err := d.client.UpdateItem(context.Background(), &params)
 	if err != nil {
 		return nil, err
 	}
 	heartCount := pb.HeartCount{}
-	err = dynamodbattribute.UnmarshalMap(resp.Attributes, &heartCount)
+	err = unmarshalMap(resp.Attributes, &heartCount)
 	if err != nil {
 		return nil, err
 	}
@@ -108,26 +101,25 @@ func (d *DynamoClient) AddHeart(key string) (*pb.HeartCount, error) {
 }
 
 func (d *DynamoClient) GetProto(table string, keys map[string]string, p proto.Message) error {
-	dynamoKeys := make(map[string]dynamodb.AttributeValue)
+	dynamoKeys := make(map[string]types.AttributeValue)
 	var keyErr error
-	var k *dynamodb.AttributeValue
+	var k types.AttributeValue
 	for keyName, key := range keys {
-		k, keyErr = dynamodbattribute.Marshal(&key)
-		dynamoKeys[keyName] = *k
+		k, keyErr = marshal(key)
+		dynamoKeys[keyName] = k
 	}
 	if keyErr != nil {
 		glog.Errorf("Error marshalling key to attribute: %s", keyErr)
 		return keyErr
 	}
-	req := d.client.GetItemRequest(&dynamodb.GetItemInput{
+	res, err := d.client.GetItem(context.Background(), &dynamodb.GetItemInput{
 		TableName: &table,
 		Key:       dynamoKeys})
-	res, err := req.Send(context.Background())
 	if err != nil {
 		glog.Errorf("Error sending get request for %s %s", reflect.TypeOf(p), err)
 		return err
 	}
-	err = dynamodbattribute.UnmarshalMap(res.Item, p)
+	err = unmarshalMap(res.Item, p)
 	if err != nil {
 		glog.Errorf("Error unmarshalling response into %s %s", reflect.TypeOf(p), err)
 		return err
@@ -137,17 +129,17 @@ func (d *DynamoClient) GetProto(table string, keys map[string]string, p proto.Me
 }
 
 func (d *DynamoClient) PutProtoBatch(table *string, protos []proto.Message) error {
-	reqs := make([]dynamodb.WriteRequest, 0)
+	reqs := make([]types.WriteRequest, 0)
 	for _, p := range protos {
-		av, err := dynamodbattribute.MarshalMap(&p)
+		av, err := marshalMap(p)
 		if err != nil {
 			return err
 		}
-		reqs = append(reqs, dynamodb.WriteRequest{PutRequest: &dynamodb.PutRequest{Item: av}})
+		reqs = append(reqs, types.WriteRequest{PutRequest: &types.PutRequest{Item: av}})
 	}
 	numBatches := int(math.Ceil(float64(len(reqs)) / 25.0))
 	currentBatch := 0
-	problematicReqs := make([]dynamodb.WriteRequest, 0)
+	problematicReqs := make([]types.WriteRequest, 0)
 	for len(reqs) > 0 {
 		// Take last 25 reqs (or all if <25 left)
 		// Dynamo db restricts batch calls to 25 or fewer items
@@ -155,10 +147,9 @@ func (d *DynamoClient) PutProtoBatch(table *string, protos []proto.Message) erro
 		if startIdx < 0 {
 			startIdx = 0
 		}
-		req := d.client.BatchWriteItemRequest(&dynamodb.BatchWriteItemInput{
-			RequestItems: map[string][]dynamodb.WriteRequest{
+		_, err := d.client.BatchWriteItem(context.Background(), &dynamodb.BatchWriteItemInput{
+			RequestItems: map[string][]types.WriteRequest{
 				*table: reqs[startIdx:]}})
-		_, err := req.Send(context.Background())
 		if err != nil {
 			glog.Errorf("Error batch putting %s %s", reflect.TypeOf(protos), err)
 			problematicReqs = append(problematicReqs, reqs[startIdx:]...)
@@ -169,10 +160,9 @@ func (d *DynamoClient) PutProtoBatch(table *string, protos []proto.Message) erro
 	}
 	glog.Infof("Trying problematic requests individually (%d)", len(problematicReqs))
 	for _, probReq := range problematicReqs {
-		req := d.client.BatchWriteItemRequest(&dynamodb.BatchWriteItemInput{
-			RequestItems: map[string][]dynamodb.WriteRequest{
-				*table: []dynamodb.WriteRequest{probReq}}})
-		_, err := req.Send(context.Background())
+		_, err := d.client.BatchWriteItem(context.Background(), &dynamodb.BatchWriteItemInput{
+			RequestItems: map[string][]types.WriteRequest{
+				*table: {probReq}}})
 		if err != nil {
 			glog.Errorf("Error putting item %s", err)
 		}
@@ -183,15 +173,14 @@ func (d *DynamoClient) PutProtoBatch(table *string, protos []proto.Message) erro
 
 func (d *DynamoClient) PutProto(table *string, p proto.Message) error {
 	// Convert from proto to dynamodb friendly structure
-	av, err := dynamodbattribute.MarshalMap(&p)
+	av, err := marshalMap(p)
 	if err != nil {
 		return err
 	}
 	// Create and send put request
-	req := d.client.PutItemRequest(&dynamodb.PutItemInput{
+	_, err = d.client.PutItem(context.Background(), &dynamodb.PutItemInput{
 		TableName: table,
 		Item:      av})
-	_, err = req.Send(context.Background())
 	if err != nil {
 		glog.Errorf("Error putting item %s", err)
 		return err

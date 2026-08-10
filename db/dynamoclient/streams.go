@@ -6,19 +6,60 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/anders617/mdining-proto/proto/mdining"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/dynamodbattribute"
+	pb "github.com/MichiganDiningAPI/proto/mdining"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
+	streamtypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 	"github.com/golang/glog"
 )
+
+// convertStreamAttributeValue converts a dynamodbstreams AttributeValue (its own
+// distinct union type) into the dynamodb AttributeValue type attributevalue.UnmarshalMap expects.
+func convertStreamAttributeValue(v streamtypes.AttributeValue) types.AttributeValue {
+	switch t := v.(type) {
+	case *streamtypes.AttributeValueMemberB:
+		return &types.AttributeValueMemberB{Value: t.Value}
+	case *streamtypes.AttributeValueMemberBOOL:
+		return &types.AttributeValueMemberBOOL{Value: t.Value}
+	case *streamtypes.AttributeValueMemberBS:
+		return &types.AttributeValueMemberBS{Value: t.Value}
+	case *streamtypes.AttributeValueMemberL:
+		converted := make([]types.AttributeValue, len(t.Value))
+		for i, item := range t.Value {
+			converted[i] = convertStreamAttributeValue(item)
+		}
+		return &types.AttributeValueMemberL{Value: converted}
+	case *streamtypes.AttributeValueMemberM:
+		return &types.AttributeValueMemberM{Value: convertStreamAttributeMap(t.Value)}
+	case *streamtypes.AttributeValueMemberN:
+		return &types.AttributeValueMemberN{Value: t.Value}
+	case *streamtypes.AttributeValueMemberNS:
+		return &types.AttributeValueMemberNS{Value: t.Value}
+	case *streamtypes.AttributeValueMemberNULL:
+		return &types.AttributeValueMemberNULL{Value: t.Value}
+	case *streamtypes.AttributeValueMemberS:
+		return &types.AttributeValueMemberS{Value: t.Value}
+	case *streamtypes.AttributeValueMemberSS:
+		return &types.AttributeValueMemberSS{Value: t.Value}
+	}
+	return nil
+}
+
+func convertStreamAttributeMap(m map[string]streamtypes.AttributeValue) map[string]types.AttributeValue {
+	converted := make(map[string]types.AttributeValue, len(m))
+	for k, v := range m {
+		converted[k] = convertStreamAttributeValue(v)
+	}
+	return converted
+}
 
 func (d *DynamoClient) StreamHearts() (chan pb.HeartCount, chan struct{}) {
 	heartCountChan := make(chan pb.HeartCount)
 	recordChan, doneChan := d.streamRecords(HeartsTableName)
-	go func(heartCountChan chan pb.HeartCount, recordChan chan dynamodbstreams.Record) {
+	go func(heartCountChan chan pb.HeartCount, recordChan chan streamtypes.Record) {
 		for record := range recordChan {
 			heartCount := pb.HeartCount{}
-			err := dynamodbattribute.UnmarshalMap(record.Dynamodb.NewImage, &heartCount)
+			err := unmarshalMap(convertStreamAttributeMap(record.Dynamodb.NewImage), &heartCount)
 			if err != nil {
 				glog.Warningf("Could not umarshal heart count: %s", err)
 				continue
@@ -29,10 +70,10 @@ func (d *DynamoClient) StreamHearts() (chan pb.HeartCount, chan struct{}) {
 	return heartCountChan, doneChan
 }
 
-func (d *DynamoClient) streamRecords(table string) (chan dynamodbstreams.Record, chan struct{}) {
-	recordChan := make(chan dynamodbstreams.Record)
+func (d *DynamoClient) streamRecords(table string) (chan streamtypes.Record, chan struct{}) {
+	recordChan := make(chan streamtypes.Record)
 	doneChan := make(chan struct{})
-	go func(recordChan chan dynamodbstreams.Record, doneChan chan struct{}, table string) {
+	go func(recordChan chan streamtypes.Record, doneChan chan struct{}, table string) {
 		processingShards := map[string]struct{}{}
 		ticker := time.NewTicker(5 * time.Minute)
 		doneChans := []chan struct{}{}
@@ -41,7 +82,7 @@ func (d *DynamoClient) streamRecords(table string) (chan dynamodbstreams.Record,
 		shardPollCount := 0
 		shardPollCountMu := sync.Mutex{}
 		// Send done message to all shard specific doneChans if we get a done message
-		go func(doneChan chan struct{}, recordChan chan dynamodbstreams.Record) {
+		go func(doneChan chan struct{}, recordChan chan streamtypes.Record) {
 			<-doneChan
 			mu.Lock()
 			for _, done := range doneChans {
@@ -58,14 +99,20 @@ func (d *DynamoClient) streamRecords(table string) (chan dynamodbstreams.Record,
 			}
 			streamArn, err := d.getTableStreamArn(table)
 			if err != nil {
-				glog.Fatalf("Failed to get stream arn")
+				glog.Errorf("Failed to get stream arn, will retry: %s", err)
+				mu.Unlock()
+				time.Sleep(time.Second)
+				continue
 			}
 			glog.Infof("Stream Arn: %s", *streamArn)
 			shards, err := d.getStreamShards(*streamArn)
 			if err != nil {
-				glog.Fatalf("Failed to get stream shards")
+				glog.Errorf("Failed to get stream shards, will retry: %s", err)
+				mu.Unlock()
+				time.Sleep(time.Second)
+				continue
 			}
-			recordChans := []chan dynamodbstreams.Record{}
+			recordChans := []chan streamtypes.Record{}
 			// For each shard, start polling for records
 			for _, shard := range *shards {
 				_, alreadyProcessing := processingShards[*shard.ShardId]
@@ -76,7 +123,9 @@ func (d *DynamoClient) streamRecords(table string) (chan dynamodbstreams.Record,
 				processingShards[*shard.ShardId] = struct{}{}
 				shardIt, err := d.getShardIterator(*streamArn, shard)
 				if err != nil {
-					glog.Fatalf("Failed to get shard iterator")
+					glog.Errorf("Failed to get shard iterator for shard %s, skipping: %s", *shard.ShardId, err)
+					delete(processingShards, *shard.ShardId)
+					continue
 				}
 				shardPollCountMu.Lock()
 				shardPollCount++
@@ -87,7 +136,7 @@ func (d *DynamoClient) streamRecords(table string) (chan dynamodbstreams.Record,
 			}
 			// Aggregate each shard specific recordChan into one channel
 			for _, records := range recordChans {
-				go func(records chan dynamodbstreams.Record) {
+				go func(records chan streamtypes.Record) {
 					for record := range records {
 						recordChan <- record
 					}
@@ -108,10 +157,10 @@ func (d *DynamoClient) streamRecords(table string) (chan dynamodbstreams.Record,
 	return recordChan, doneChan
 }
 
-func (d *DynamoClient) pollShardForRecords(shardIterator string) (chan dynamodbstreams.Record, chan struct{}) {
-	recordChan := make(chan dynamodbstreams.Record)
+func (d *DynamoClient) pollShardForRecords(shardIterator string) (chan streamtypes.Record, chan struct{}) {
+	recordChan := make(chan streamtypes.Record)
 	doneChan := make(chan struct{})
-	go func(recordChan chan dynamodbstreams.Record, doneChan chan struct{}, shardIterator string) {
+	go func(recordChan chan streamtypes.Record, doneChan chan struct{}, shardIterator string) {
 		shardIt := &shardIterator
 		defer close(recordChan)
 		for shardIt != nil {
@@ -119,7 +168,7 @@ func (d *DynamoClient) pollShardForRecords(shardIterator string) (chan dynamodbs
 			case <-doneChan:
 				return
 			default:
-				var records *[]dynamodbstreams.Record
+				var records *[]streamtypes.Record
 				var err error
 				shardIt, records, err = d.getRecords(*shardIt)
 				if err != nil {
@@ -138,42 +187,35 @@ func (d *DynamoClient) pollShardForRecords(shardIterator string) (chan dynamodbs
 	return recordChan, doneChan
 }
 
-func (d *DynamoClient) getRecords(shardIterator string) (*string, *[]dynamodbstreams.Record, error) {
+func (d *DynamoClient) getRecords(shardIterator string) (*string, *[]streamtypes.Record, error) {
 	params := dynamodbstreams.GetRecordsInput{
 		ShardIterator: &shardIterator,
 	}
-	req := d.streamClient.GetRecordsRequest(&params)
-
-	resp, err := req.Send(context.Background())
+	resp, err := d.streamClient.GetRecords(context.Background(), &params)
 	if err != nil {
 		return nil, nil, err
 	}
 	return resp.NextShardIterator, &resp.Records, nil
 }
 
-func (d *DynamoClient) getShardIterator(arn string, shard dynamodbstreams.Shard) (*string, error) {
+func (d *DynamoClient) getShardIterator(arn string, shard streamtypes.Shard) (*string, error) {
 	params := dynamodbstreams.GetShardIteratorInput{
 		StreamArn:         &arn,
 		ShardId:           shard.ShardId,
-		ShardIteratorType: dynamodbstreams.ShardIteratorTypeLatest,
+		ShardIteratorType: streamtypes.ShardIteratorTypeLatest,
 	}
-
-	req := d.streamClient.GetShardIteratorRequest(&params)
-
-	resp, err := req.Send(context.Background())
+	resp, err := d.streamClient.GetShardIterator(context.Background(), &params)
 	if err != nil {
 		return nil, err
 	}
 	return resp.ShardIterator, nil
 }
 
-func (d *DynamoClient) getStreamShards(arn string) (*[]dynamodbstreams.Shard, error) {
+func (d *DynamoClient) getStreamShards(arn string) (*[]streamtypes.Shard, error) {
 	params := dynamodbstreams.DescribeStreamInput{
 		StreamArn: &arn,
 	}
-	req := d.streamClient.DescribeStreamRequest(&params)
-
-	resp, err := req.Send(context.Background())
+	resp, err := d.streamClient.DescribeStream(context.Background(), &params)
 	if err != nil {
 		return nil, err
 	}
@@ -181,13 +223,11 @@ func (d *DynamoClient) getStreamShards(arn string) (*[]dynamodbstreams.Shard, er
 }
 
 func (d *DynamoClient) getTableStreamArn(table string) (*string, error) {
-	// Example sending a request using the ListStreamsRequest method.
+	// Example sending a request using the ListStreams method.
 	params := dynamodbstreams.ListStreamsInput{
 		TableName: &table,
 	}
-	req := d.streamClient.ListStreamsRequest(&params)
-
-	resp, err := req.Send(context.Background())
+	resp, err := d.streamClient.ListStreams(context.Background(), &params)
 	if err != nil { // resp is now filled
 		return nil, err
 	}

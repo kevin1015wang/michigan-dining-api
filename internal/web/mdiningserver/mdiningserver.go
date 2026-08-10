@@ -9,7 +9,7 @@ import (
 	"github.com/MichiganDiningAPI/db/dynamoclient"
 	"github.com/MichiganDiningAPI/internal/processing/mdiningprocessing"
 	"github.com/MichiganDiningAPI/internal/util/date"
-	pb "github.com/anders617/mdining-proto/proto/mdining"
+	pb "github.com/MichiganDiningAPI/proto/mdining"
 	"github.com/golang/glog"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"

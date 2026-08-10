@@ -1,0 +1,25 @@
+FROM golang:1.25-bookworm AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/fetch ./cmd/fetch
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/db ./cmd/db
+
+# Installs only the small Playwright Node driver (not the browsers - this base
+# image already bundles a matching Chromium build for the same version, see
+# below) into a fixed path shared with the final image.
+ENV PLAYWRIGHT_DRIVER_PATH=/pw-driver
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/playwrightinstall ./cmd/playwrightinstall \
+    && /out/playwrightinstall
+
+# The mxschmitt/playwright-go version pinned in go.mod requires a specific
+# driver/browser version (currently v1.61.1) - this base image's tag must
+# match it exactly. Check the pinned playwrightCliVersion in the playwright-go
+# module if bumping either dependency.
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
+ENV PLAYWRIGHT_DRIVER_PATH=/pw-driver
+COPY --from=builder /pw-driver /pw-driver
+COPY --from=builder /out/fetch /fetch
+COPY --from=builder /out/db /db
+ENTRYPOINT ["/fetch"]

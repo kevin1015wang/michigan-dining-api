@@ -1,0 +1,40 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "MichiganDiningAPITables",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:BatchGetItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:*:table/DiningHalls",
+        "arn:aws:dynamodb:us-east-1:*:table/Items",
+        "arn:aws:dynamodb:us-east-1:*:table/Menus",
+        "arn:aws:dynamodb:us-east-1:*:table/Foods",
+        "arn:aws:dynamodb:us-east-1:*:table/FoodStats",
+        "arn:aws:dynamodb:us-east-1:*:table/Hearts"
+      ]
+    },
+    {
+      "Sid": "MichiganDiningAPIStreams",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:ListStreams",
+        "dynamodb:DescribeStream",
+        "dynamodb:GetShardIterator",
+        "dynamodb:GetRecords"
+      ],
+      "Resource": "arn:aws:dynamodb:us-east-1:*:table/Hearts/stream/*"
+    }
+  ]
+}

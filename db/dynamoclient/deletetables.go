@@ -16,9 +16,8 @@ func (d *DynamoClient) DeleteTables() error {
 }
 
 func (d *DynamoClient) deleteTable(table string) {
-	deleteReq := d.client.DeleteTableRequest(&dynamodb.DeleteTableInput{
+	_, err := d.client.DeleteTable(context.Background(), &dynamodb.DeleteTableInput{
 		TableName: &table})
-	_, err := deleteReq.Send(context.Background())
 	if err != nil {
 		glog.Fatalf("Failed to delete table %s %v", table, err)
 	}
