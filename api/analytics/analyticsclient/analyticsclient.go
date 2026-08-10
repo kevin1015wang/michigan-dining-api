@@ -18,9 +18,7 @@ const analyticsTrackingID = "UA-85646494-2"
 const analyticsDataSource = "server"
 const analyticsHitType = "pageview"
 
-//
 // AnalyticsClient - A type for sending page hits to Google analytics
-//
 type AnalyticsClient struct {
 	// HTTP client used to send requests
 	client *http.Client
@@ -30,9 +28,7 @@ type AnalyticsClient struct {
 	mu sync.Mutex
 }
 
-//
 // New - Create a new AnalyticsClient object
-//
 func New() *AnalyticsClient {
 	ac := new(AnalyticsClient)
 	ac.client = new(http.Client)
@@ -40,11 +36,9 @@ func New() *AnalyticsClient {
 	return ac
 }
 
-//
 // SendHit - Send a hit to Google Analytics
 //
 // See https://developers.google.com/analytics/devguides/collection/protocol/v1/parameters for more info
-//
 func (ac *AnalyticsClient) SendHit(r *http.Request) {
 	ip := getIPFromRemoteAddr(r.RemoteAddr)
 	params := url.Values{}

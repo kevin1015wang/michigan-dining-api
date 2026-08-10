@@ -10,9 +10,7 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
-//
 // ReadProtoFromFile - Reads a proto from the given file path
-//
 func ReadProtoFromFile(path string, p proto.Message) error {
 	data, err := ioutil.ReadFile(path)
 	if err != nil {

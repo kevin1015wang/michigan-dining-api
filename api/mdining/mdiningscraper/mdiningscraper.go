@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/MichiganDiningAPI/internal/util/date"
 	pb "github.com/MichiganDiningAPI/proto/mdining"
+	"github.com/PuerkitoBio/goquery"
 	"github.com/golang/glog"
 	"github.com/mxschmitt/playwright-go"
 )
