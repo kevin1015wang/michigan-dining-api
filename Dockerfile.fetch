@@ -22,4 +22,4 @@ ENV PLAYWRIGHT_DRIVER_PATH=/pw-driver
 COPY --from=builder /pw-driver /pw-driver
 COPY --from=builder /out/fetch /fetch
 COPY --from=builder /out/db /db
-ENTRYPOINT ["/fetch"]
+ENTRYPOINT ["/fetch", "--alsologtostderr"]
