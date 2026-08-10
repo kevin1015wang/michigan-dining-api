@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"reflect"
+	"time"
 
 	pb "github.com/MichiganDiningAPI/proto/mdining"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -147,12 +148,20 @@ func (d *DynamoClient) PutProtoBatch(table *string, protos []proto.Message) erro
 		if startIdx < 0 {
 			startIdx = 0
 		}
-		_, err := d.client.BatchWriteItem(context.Background(), &dynamodb.BatchWriteItemInput{
+		out, err := d.client.BatchWriteItem(context.Background(), &dynamodb.BatchWriteItemInput{
 			RequestItems: map[string][]types.WriteRequest{
 				*table: reqs[startIdx:]}})
 		if err != nil {
 			glog.Errorf("Error batch putting %s %s", reflect.TypeOf(protos), err)
 			problematicReqs = append(problematicReqs, reqs[startIdx:]...)
+		} else if unprocessed := out.UnprocessedItems[*table]; len(unprocessed) > 0 {
+			// DynamoDB can throttle individual items within an otherwise
+			// successful batch (e.g. under load right after switching to
+			// on-demand capacity) without returning an error - those items
+			// come back here instead of being written, so they must be
+			// retried explicitly or they're silently dropped.
+			glog.Warningf("%d unprocessed items batch putting %s, will retry individually", len(unprocessed), reflect.TypeOf(protos))
+			problematicReqs = append(problematicReqs, unprocessed...)
 		}
 		reqs = reqs[:startIdx]
 		glog.Infof("Batch Put %s (%d/%d): %d Items Remaining", *table, currentBatch, numBatches, len(reqs))
@@ -160,11 +169,22 @@ func (d *DynamoClient) PutProtoBatch(table *string, protos []proto.Message) erro
 	}
 	glog.Infof("Trying problematic requests individually (%d)", len(problematicReqs))
 	for _, probReq := range problematicReqs {
-		_, err := d.client.BatchWriteItem(context.Background(), &dynamodb.BatchWriteItemInput{
-			RequestItems: map[string][]types.WriteRequest{
-				*table: {probReq}}})
-		if err != nil {
-			glog.Errorf("Error putting item %s", err)
+		for attempt := 0; ; attempt++ {
+			out, err := d.client.BatchWriteItem(context.Background(), &dynamodb.BatchWriteItemInput{
+				RequestItems: map[string][]types.WriteRequest{
+					*table: {probReq}}})
+			if err != nil {
+				glog.Errorf("Error putting item %s", err)
+				break
+			}
+			if len(out.UnprocessedItems[*table]) == 0 {
+				break
+			}
+			if attempt >= 3 {
+				glog.Errorf("Giving up on item in %s after %d retries, still unprocessed", *table, attempt+1)
+				break
+			}
+			time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
 		}
 	}
 	glog.Infof("Successful Batch Put %s", reflect.TypeOf(protos))

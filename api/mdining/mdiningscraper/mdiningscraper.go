@@ -123,27 +123,9 @@ func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 
 	for i, loc := range Locations {
 		url := baseURL + loc.URLPath + "/"
-		glog.Infof("Scraping %s", url)
-		resp, err := page.Goto(url, playwright.PageGotoOptions{
-			WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-			Timeout:   playwright.Float(30000),
-		})
+		doc, err := fetchDoc(page, url)
 		if err != nil {
-			glog.Warningf("Failed to load %s: %s", url, err)
-			continue
-		}
-		if resp.Status() != 200 {
-			glog.Warningf("Non-200 status %d for %s", resp.Status(), url)
-			continue
-		}
-		html, err := page.Content()
-		if err != nil {
-			glog.Warningf("Failed to read content for %s: %s", url, err)
-			continue
-		}
-		doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-		if err != nil {
-			glog.Warningf("Failed to parse html for %s: %s", url, err)
+			glog.Errorf("Giving up on %s: %s", url, err)
 			continue
 		}
 
@@ -169,6 +151,51 @@ func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 	}
 
 	return diningHalls, menus, nil
+}
+
+// maxFetchAttempts is how many times fetchDoc retries a single location
+// before giving up on it for this run. The first navigation in a fresh
+// browser context sometimes has to pay a Cloudflare challenge that can push
+// it past the per-request timeout, especially on resource-constrained hosts;
+// retrying keeps that one-off cost from silently dropping a location for the
+// whole day.
+const maxFetchAttempts = 3
+
+// fetchDoc loads url and returns its rendered HTML as a parsed document,
+// retrying transient failures (timeouts, non-200s, unparsable content).
+func fetchDoc(page playwright.Page, url string) (*goquery.Document, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxFetchAttempts; attempt++ {
+		if attempt > 1 {
+			glog.Warningf("Retrying %s (attempt %d/%d) after: %s", url, attempt, maxFetchAttempts, lastErr)
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+		glog.Infof("Scraping %s", url)
+		resp, err := page.Goto(url, playwright.PageGotoOptions{
+			WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+			Timeout:   playwright.Float(30000),
+		})
+		if err != nil {
+			lastErr = fmt.Errorf("failed to load: %w", err)
+			continue
+		}
+		if resp.Status() != 200 {
+			lastErr = fmt.Errorf("non-200 status %d", resp.Status())
+			continue
+		}
+		html, err := page.Content()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to read content: %w", err)
+			continue
+		}
+		doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+		if err != nil {
+			lastErr = fmt.Errorf("failed to parse html: %w", err)
+			continue
+		}
+		return doc, nil
+	}
+	return nil, lastErr
 }
 
 func parseMenus(doc *goquery.Document, diningHallName string, group string, date string, formattedDate string) []*pb.Menu {
