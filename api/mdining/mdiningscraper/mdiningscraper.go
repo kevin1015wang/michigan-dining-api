@@ -248,47 +248,79 @@ func parseDayHours(doc *goquery.Document, date string) []*pb.DiningHall_DayHour 
 	return []*pb.DiningHall_DayHour{{Key: date, Hour: hours}}
 }
 
+// unlabeledMeal is the synthetic Meal value used for cafes and markets,
+// whose pages (unlike dining halls) don't split their menu into named
+// meal-period sections.
+const unlabeledMeal = "Menu"
+
 func parseMenus(doc *goquery.Document, diningHallName string, group string, date string, formattedDate string) []*pb.Menu {
 	menus := []*pb.Menu{}
-	doc.Find("#mdining-items > h3").Each(func(_ int, h3 *goquery.Selection) {
-		meal := strings.TrimSpace(h3.Find("a").First().Text())
-		if meal == "" {
-			return
-		}
 
-		categories := []*pb.Category{}
-		h3.Next().Find("ul.courses_wrapper > li").Each(func(_ int, catLi *goquery.Selection) {
-			catName := strings.TrimSpace(catLi.ChildrenFiltered("h4").First().Text())
-			menuItems := []*pb.MenuItem{}
-			catLi.Find("ul.items > li").Each(func(_ int, itemLi *goquery.Selection) {
-				itemName := strings.TrimSpace(itemLi.Find(".item-name").First().Text())
-				if itemName == "" {
-					return
-				}
-				attribute, allergens := parseTraitsAndAllergens(itemLi)
-				menuItems = append(menuItems, &pb.MenuItem{
-					Name:      itemName,
-					Attribute: attribute,
-					Allergens: allergens,
-				})
-			})
-			if catName != "" || len(menuItems) > 0 {
-				categories = append(categories, &pb.Category{Name: catName, MenuItem: menuItems})
+	h3s := doc.Find("#mdining-items > h3")
+	if h3s.Length() > 0 {
+		h3s.Each(func(_ int, h3 *goquery.Selection) {
+			meal := strings.TrimSpace(h3.Find("a").First().Text())
+			if meal == "" {
+				return
 			}
+			categories := parseCategories(h3.Next())
+			menus = append(menus, buildMenu(diningHallName, group, meal, date, formattedDate, categories))
 		})
+		return menus
+	}
 
-		menus = append(menus, &pb.Menu{
-			Meal:             meal,
-			Date:             date,
-			FormattedDate:    formattedDate,
-			HasCategories:    len(categories) > 0,
-			Category:         categories,
-			DiningHallName:   diningHallName,
-			DiningHallMeal:   diningHallName + meal,
-			DiningHallCampus: group,
-		})
-	})
+	// Cafes and markets don't render per-meal <h3> sections; when they have
+	// a menu at all, it's a single unlabeled course list directly under
+	// #mdining-items (24/7 kiosks like vending markets have neither).
+	courseHijax := doc.Find("#mdining-items > .course-hijax").First()
+	if categories := parseCategories(courseHijax); len(categories) > 0 {
+		menus = append(menus, buildMenu(diningHallName, group, unlabeledMeal, date, formattedDate, categories))
+	}
 	return menus
+}
+
+func parseCategories(container *goquery.Selection) []*pb.Category {
+	categories := []*pb.Category{}
+	container.Find("ul.courses_wrapper > li").Each(func(_ int, catLi *goquery.Selection) {
+		catName := strings.TrimSpace(catLi.ChildrenFiltered("h4").First().Text())
+		menuItems := []*pb.MenuItem{}
+		catLi.Find("ul.items > li").Each(func(_ int, itemLi *goquery.Selection) {
+			// Cafe/market item names embed a nested .price span (e.g.
+			// "Michigan Mocha  $5.50") that dining hall items don't have;
+			// drop it and collapse the whitespace it leaves behind rather
+			// than storing the price glued onto the name (there's no
+			// dedicated price field to put it in instead).
+			nameEl := itemLi.Find(".item-name").First().Clone()
+			nameEl.Find(".price").Remove()
+			itemName := strings.Join(strings.Fields(nameEl.Text()), " ")
+			if itemName == "" {
+				return
+			}
+			attribute, allergens := parseTraitsAndAllergens(itemLi)
+			menuItems = append(menuItems, &pb.MenuItem{
+				Name:      itemName,
+				Attribute: attribute,
+				Allergens: allergens,
+			})
+		})
+		if catName != "" || len(menuItems) > 0 {
+			categories = append(categories, &pb.Category{Name: catName, MenuItem: menuItems})
+		}
+	})
+	return categories
+}
+
+func buildMenu(diningHallName, group, meal, date, formattedDate string, categories []*pb.Category) *pb.Menu {
+	return &pb.Menu{
+		Meal:             meal,
+		Date:             date,
+		FormattedDate:    formattedDate,
+		HasCategories:    len(categories) > 0,
+		Category:         categories,
+		DiningHallName:   diningHallName,
+		DiningHallMeal:   diningHallName + meal,
+		DiningHallCampus: group,
+	}
 }
 
 func parseTraitsAndAllergens(itemLi *goquery.Selection) (attributes []string, allergens []string) {
