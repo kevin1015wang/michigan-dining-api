@@ -273,9 +273,24 @@ func parseMenus(doc *goquery.Document, diningHallName string, group string, date
 	// a menu at all, it's a single unlabeled course list directly under
 	// #mdining-items (24/7 kiosks like vending markets have neither).
 	courseHijax := doc.Find("#mdining-items > .course-hijax").First()
-	if categories := parseCategories(courseHijax); len(categories) > 0 {
+	categories := parseCategories(courseHijax)
+	if len(categories) > 0 {
 		menus = append(menus, buildMenu(diningHallName, group, unlabeledMeal, date, formattedDate, categories))
+		return menus
 	}
+	// TEMP DIAGNOSTIC (remove once we know why prod sees 0 cafe/market menus
+	// despite this working reliably against live pages from a dev machine):
+	// distinguishes "no #mdining-items at all" (24/7 kiosk, no menu page)
+	// from "#mdining-items present but empty" (genuine no-menu-today) from
+	// "course-hijax present but parsed 0 categories" (markup mismatch or a
+	// JS-rendering race under WaitUntilStateDomcontentloaded).
+	glog.Warningf(
+		"parseMenus fallback got 0 categories for %s on %s: mdining-items=%v course-hijax=%v no-menu=%v",
+		diningHallName, date,
+		doc.Find("#mdining-items").Length() > 0,
+		courseHijax.Length() > 0,
+		doc.Find("#mdining-items .no-menu").Length() > 0,
+	)
 	return menus
 }
 
