@@ -103,8 +103,25 @@ scraping burst).
 Then schedule it daily via the host's crontab (`crontab -e`):
 
 ```
-0 6 * * * cd /path/to/michigan-dining-api && docker compose run --rm fetch >> /var/log/mdining-fetch.log 2>&1
+0 6 * * * cd /path/to/michigan-dining-api && docker compose run --rm fetch > /var/log/mdining-fetch.log 2>&1
 ```
+
+Two things about this line:
+
+- **`>` overwrites the log file each run instead of appending (`>>`).** Cron
+  runs forever with no rotation, so an appending log grows without bound -
+  overwriting keeps only the latest run, which is enough to answer "did last
+  night's run work" without eating disk over time. If you want a rolling
+  history instead, set up `logrotate` for this file rather than switching
+  back to `>>`.
+- **Cron time is in the server's local time, not UTC.** `web`'s in-memory
+  cache only reloads once a day, at a fixed 06:30 UTC (see
+  `internal/util/date/date.go`'s `fetchTimeOnDate`). `fetch` needs to finish
+  *before* that for the day's fetch to actually show up on the next reload -
+  it currently takes ~10 minutes (25 locations x 7 days = ~175 pages). Check
+  your server's timezone (`date`) and adjust the cron time so it lands
+  comfortably ahead of 06:30 UTC; `0 6 * * *` is only correct as-is if the
+  server's cron already runs in UTC.
 
 ## Notes / things that may need attention later
 
