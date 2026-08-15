@@ -9,6 +9,8 @@ package mdiningscraper
 import (
 	"fmt"
 	"math/rand"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,11 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/golang/glog"
 	"github.com/mxschmitt/playwright-go"
+)
+
+var (
+	valueUnitRegex    = regexp.MustCompile(`^([\d\.]+)\s*([a-zA-Z%]*)$`)
+	percentDailyRegex = regexp.MustCompile(`(\d+)%?`)
 )
 
 const (
@@ -312,10 +319,16 @@ func parseCategories(container *goquery.Selection) []*pb.Category {
 				return
 			}
 			attribute, allergens := parseTraitsAndAllergens(itemLi)
+			nutDiv := itemLi.NextFiltered("div.nutrition")
+			if nutDiv.Length() == 0 {
+				nutDiv = itemLi.Find("div.nutrition")
+			}
+			itemSizes := ParseNutritionInfo(nutDiv)
 			menuItems = append(menuItems, &pb.MenuItem{
 				Name:      itemName,
 				Attribute: attribute,
 				Allergens: allergens,
+				ItemSizes: itemSizes,
 			})
 		})
 		if catName != "" || len(menuItems) > 0 {
@@ -323,6 +336,129 @@ func parseCategories(container *goquery.Selection) []*pb.Category {
 		}
 	})
 	return categories
+}
+
+func ParseNutritionInfo(nutritionDiv *goquery.Selection) []*pb.ItemSizes {
+	if nutritionDiv == nil || nutritionDiv.Length() == 0 {
+		return nil
+	}
+
+	if nutritionDiv.Find(".no-nutrition-facts").Length() > 0 {
+		return nil
+	}
+
+	table := nutritionDiv.Find("table.nutrition-facts")
+	if table.Length() == 0 {
+		return nil
+	}
+
+	servingSizeText := strings.TrimSpace(table.Find(".serving-size").Text())
+	servingSizeText = strings.TrimPrefix(servingSizeText, "Serving Size")
+	servingSizeText = strings.TrimSpace(servingSizeText)
+
+	nutritionalInfoList := []*pb.NutritionalInfo{}
+
+	caloriesText := strings.TrimSpace(table.Find(".portion-calories").Text())
+	caloriesText = strings.TrimPrefix(caloriesText, "Calories")
+	caloriesText = strings.TrimSpace(caloriesText)
+	if caloriesVal, err := strconv.Atoi(caloriesText); err == nil {
+		nutritionalInfoList = append(nutritionalInfoList, &pb.NutritionalInfo{
+			Name:  "Calories",
+			Value: int32(caloriesVal),
+			Units: "kcal",
+			Type:  "CALORIES",
+		})
+	}
+
+	table.Find("tr").Each(func(_ int, tr *goquery.Selection) {
+		class, _ := tr.Attr("class")
+		if strings.Contains(class, "nutrition-facts-header") ||
+			strings.Contains(class, "serving-size") ||
+			strings.Contains(class, "portion-calories") {
+			return
+		}
+
+		tds := tr.Find("td")
+		if tds.Length() < 1 {
+			return
+		}
+
+		col1 := strings.TrimSpace(tds.Eq(0).Text())
+		if col1 == "" || strings.HasPrefix(col1, "Amount Per Serving") || strings.HasPrefix(col1, "% Daily Value") {
+			return
+		}
+
+		col2 := ""
+		if tds.Length() >= 2 {
+			col2 = strings.TrimSpace(tds.Eq(1).Text())
+		}
+
+		if strings.Contains(class, "micronutrient") {
+			nutName := col1
+			var dv int32 = 0
+			if matches := percentDailyRegex.FindStringSubmatch(col2); len(matches) > 1 {
+				if v, err := strconv.Atoi(matches[1]); err == nil {
+					dv = int32(v)
+				}
+			}
+			nutritionalInfoList = append(nutritionalInfoList, &pb.NutritionalInfo{
+				Name:              nutName,
+				PercentDailyValue: dv,
+				Type:              "MICRONUTRIENT",
+			})
+			return
+		}
+
+		parts := strings.Fields(col1)
+		if len(parts) == 0 {
+			return
+		}
+
+		lastPart := parts[len(parts)-1]
+		nutName := strings.Join(parts[:len(parts)-1], " ")
+
+		var val int32 = 0
+		units := ""
+		if matches := valueUnitRegex.FindStringSubmatch(lastPart); len(matches) > 1 {
+			if v, err := strconv.ParseFloat(matches[1], 64); err == nil {
+				val = int32(v)
+			}
+			units = matches[2]
+		} else {
+			nutName = col1
+		}
+
+		var dv int32 = 0
+		if matches := percentDailyRegex.FindStringSubmatch(col2); len(matches) > 1 {
+			if v, err := strconv.Atoi(matches[1]); err == nil {
+				dv = int32(v)
+			}
+		}
+
+		nutType := "MACRONUTRIENT"
+		if strings.Contains(class, "indent") {
+			nutType = "SUB_NUTRIENT"
+		}
+
+		nutritionalInfoList = append(nutritionalInfoList, &pb.NutritionalInfo{
+			Name:              nutName,
+			Value:             val,
+			Units:             units,
+			PercentDailyValue: dv,
+			Type:              nutType,
+		})
+	})
+
+	if len(nutritionalInfoList) == 0 && servingSizeText == "" {
+		return nil
+	}
+
+	return []*pb.ItemSizes{
+		{
+			ServingSize:     servingSizeText,
+			NutritionalInfo: nutritionalInfoList,
+		},
+	}
 }
 
 func buildMenu(diningHallName, group, meal, date, formattedDate string, categories []*pb.Category) *pb.Menu {
