@@ -54,6 +54,7 @@ var Locations = []Location{
 	{URLPath: "dining-halls/north-quad", Group: DiningHallsGroup},
 	{URLPath: "dining-halls/south-quad", Group: DiningHallsGroup},
 	{URLPath: "dining-halls/twigs-at-oxford", Group: DiningHallsGroup},
+	{URLPath: "dining-halls/wolverine-village-dining-hall", Group: DiningHallsGroup},
 	{URLPath: "dining-halls/select-access/lawyers-club", Group: DiningHallsGroup},
 	{URLPath: "dining-halls/select-access/martha-cook", Group: DiningHallsGroup},
 	{URLPath: "cafes/berts-cafe", Group: CafesGroup},
