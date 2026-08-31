@@ -142,6 +142,7 @@ func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 
 	for i, loc := range Locations {
 		var name string
+		var building *pb.DiningHall_Building
 		dayHours := []*pb.DiningHall_DayHour{}
 
 		for d, day := range dates {
@@ -156,6 +157,9 @@ func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 				glog.Warningf("Could not determine location name for %s, skipping this date", url)
 			} else {
 				name = pageName
+				if building == nil {
+					building = parseBuilding(doc)
+				}
 				dayHours = append(dayHours, parseDayHours(doc, dateStr)...)
 				menus = append(menus, parseMenus(doc, pageName, loc.Group, dateStr, formattedDate)...)
 			}
@@ -174,6 +178,7 @@ func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 		diningHalls.DiningHalls = append(diningHalls.DiningHalls, &pb.DiningHall{
 			Name:     name,
 			Campus:   loc.Group,
+			Building: building,
 			DayHours: dayHours,
 		})
 	}
@@ -254,6 +259,24 @@ func parseDayHours(doc *goquery.Document, date string) []*pb.DiningHall_DayHour 
 		return nil
 	}
 	return []*pb.DiningHall_DayHour{{Key: date, Hour: hours}}
+}
+
+// parseBuilding scrapes the address line from a location page's
+// "location-details" box (e.g. "701 East University, Ann Arbor, MI, 48109").
+// The site doesn't consistently punctuate this line (some locations omit the
+// comma before the city, or before the zip), so this stores it as a single
+// street1 value rather than risking a wrong street/city split; downstream
+// consumers get the full address either way.
+func parseBuilding(doc *goquery.Document) *pb.DiningHall_Building {
+	address := strings.Join(strings.Fields(doc.Find("ul.location-details li.address").First().Text()), " ")
+	if address == "" {
+		return nil
+	}
+	return &pb.DiningHall_Building{
+		Address: &pb.DiningHall_Building_Address{
+			Street1: address,
+		},
+	}
 }
 
 // unlabeledMeal is the synthetic Meal value used for cafes and markets,
