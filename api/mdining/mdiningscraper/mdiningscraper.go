@@ -89,10 +89,21 @@ const (
 	browserlessTokenEnv = "BROWSERLESS_TOKEN"
 	browserlessURL      = "https://production-sfo.browserless.io"
 
-	// browserlessSessionTTL is how long Browserless keeps an unblocked browser
-	// alive (ms). A full run takes longer than this; when the session expires
-	// fetchDoc's next failure triggers a fresh unblock (see reconnect).
-	browserlessSessionTTL = 5 * 60 * 1000
+	// browserlessSessionTTL is how long (ms) Browserless keeps an unblocked
+	// browser alive for us to connect to. The current plan caps this at 60s.
+	browserlessSessionTTL = 60 * 1000
+
+	// browserlessSessionMaxAge is how long the scraper uses one session before
+	// proactively swapping in a fresh one. Sessions die about a TTL after
+	// they're created, connected or not, and a full run takes ~15-20 minutes,
+	// so rotating ahead of that avoids page loads failing mid-run.
+	browserlessSessionMaxAge = 45 * time.Second
+
+	// browserlessUnblockAttempts bounds retries of the /unblock call itself,
+	// which returns 429 when the plan's concurrent-session limit is hit (e.g.
+	// a just-closed session hasn't been released yet) and 408 when it can't
+	// get through the challenge in time.
+	browserlessUnblockAttempts = 4
 )
 
 // Scraper drives a headless browser to render and scrape dining.umich.edu pages.
@@ -103,6 +114,8 @@ type Scraper struct {
 
 	// browserlessToken is empty when running a local Chromium.
 	browserlessToken string
+	// sessionStart is when the current Browserless session was connected.
+	sessionStart time.Time
 }
 
 // New starts the browser the scraper renders pages with. Call Close when done.
@@ -153,8 +166,28 @@ func (s *Scraper) launchLocal() error {
 
 // connectBrowserless asks Browserless's /unblock endpoint to load the site and
 // solve its Cloudflare challenge, then attaches to that browser session and
-// reuses its already-cleared page.
+// reuses its already-cleared page. Busy/timeout responses are retried with a
+// growing backoff.
 func (s *Scraper) connectBrowserless() error {
+	var err error
+	for attempt := 1; attempt <= browserlessUnblockAttempts; attempt++ {
+		if attempt > 1 {
+			backoff := time.Duration(attempt-1) * 20 * time.Second
+			glog.Warningf("Retrying Browserless unblock in %s (attempt %d/%d) after: %s", backoff, attempt, browserlessUnblockAttempts, err)
+			time.Sleep(backoff)
+		}
+		var retryable bool
+		retryable, err = s.unblock()
+		if err == nil || !retryable {
+			return err
+		}
+	}
+	return err
+}
+
+// unblock makes a single /unblock call and connects to the resulting session.
+// It reports whether a failure is worth retrying.
+func (s *Scraper) unblock() (retryable bool, err error) {
 	glog.Infof("Unblocking %s via Browserless", baseURL)
 	body, err := json.Marshal(map[string]interface{}{
 		"url":               baseURL,
@@ -165,40 +198,44 @@ func (s *Scraper) connectBrowserless() error {
 		"screenshot":        false,
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
-	endpoint := browserlessURL + "/unblock?proxy=residential&token=" + url.QueryEscape(s.browserlessToken)
+	endpoint := browserlessURL + "/unblock?proxy=residential&timeout=90000&token=" + url.QueryEscape(s.browserlessToken)
 	client := &http.Client{Timeout: 2 * time.Minute}
 	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
 		// Don't wrap err: *url.Error includes the request URL, token and all.
-		return fmt.Errorf("browserless unblock request failed")
+		return true, fmt.Errorf("browserless unblock request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("browserless unblock returned status %d", resp.StatusCode)
+		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= 500
+		return retryable, fmt.Errorf("browserless unblock returned status %d", resp.StatusCode)
 	}
 	var result struct {
 		BrowserWSEndpoint string `json:"browserWSEndpoint"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("could not decode browserless unblock response: %w", err)
+		return true, fmt.Errorf("could not decode browserless unblock response: %w", err)
 	}
 	if result.BrowserWSEndpoint == "" {
-		return fmt.Errorf("browserless unblock response had no browserWSEndpoint")
+		return true, fmt.Errorf("browserless unblock response had no browserWSEndpoint")
 	}
 
 	browser, err := s.pw.Chromium.ConnectOverCDP(result.BrowserWSEndpoint + "?token=" + url.QueryEscape(s.browserlessToken))
 	if err != nil {
-		return fmt.Errorf("could not connect to browserless session: %w", err)
+		return true, fmt.Errorf("could not connect to browserless session: %w", err)
 	}
 	s.browser = browser
 	contexts := browser.Contexts()
 	if len(contexts) == 0 || len(contexts[0].Pages()) == 0 {
-		return fmt.Errorf("browserless session has no open page")
+		browser.Close()
+		s.browser = nil
+		return true, fmt.Errorf("browserless session has no open page")
 	}
 	s.page = contexts[0].Pages()[0]
-	return nil
+	s.sessionStart = time.Now()
+	return false, nil
 }
 
 // reconnect replaces an expired or re-challenged Browserless session with a
@@ -310,6 +347,9 @@ func (s *Scraper) fetchDoc(url string) (*goquery.Document, error) {
 		if attempt > 1 {
 			glog.Warningf("Retrying %s (attempt %d/%d) after: %s", url, attempt, maxFetchAttempts, lastErr)
 			time.Sleep(time.Duration(attempt) * time.Second)
+			s.reconnect()
+		} else if s.browserlessToken != "" && time.Since(s.sessionStart) > browserlessSessionMaxAge {
+			glog.Infof("Rotating Browserless session after %s", time.Since(s.sessionStart).Round(time.Second))
 			s.reconnect()
 		}
 		if s.page == nil {
