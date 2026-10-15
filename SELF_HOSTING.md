@@ -69,7 +69,9 @@ On the server:
 git clone <your fork of this repo>
 cd michigan-dining-api
 cp .env.example .env
-# edit .env and fill in AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from step 1
+# edit .env and fill in AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from step 1,
+# plus BROWSERLESS_TOKEN (browserless.io) so fetch can pass the site's
+# Cloudflare Turnstile challenge
 ```
 
 If you want a domain with automatic HTTPS, edit `Caddyfile` and replace

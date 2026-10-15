@@ -26,3 +26,5 @@
 
 # Ignore bazel output directories
 bazel-*
+# Local secrets (AWS keys, Browserless token)
+.env

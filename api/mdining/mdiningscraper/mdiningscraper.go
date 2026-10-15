@@ -2,13 +2,23 @@
 // dining.umich.edu location pages. UMich retired the JSON APIs the old clients
 // (mdiningclient, mdiningclient2) used to hit, and the site is now behind a
 // Cloudflare bot check that a plain HTTP client can't pass, so this drives a
-// real headless browser (which the challenge is designed to let through) and
-// scrapes the server-rendered menu markup instead.
+// real headless browser and scrapes the server-rendered menu markup instead.
+//
+// The site now also serves a Cloudflare Turnstile challenge that a local
+// headless Chromium can't clear. If BROWSERLESS_TOKEN is set, the scraper
+// instead has Browserless (https://docs.browserless.io/examples/cloudflare)
+// solve the challenge in a remote browser and connects to that browser over
+// CDP, so every page load reuses the session's clearance cookies.
 package mdiningscraper
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/http"
+	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -75,28 +85,136 @@ var Locations = []Location{
 	{URLPath: "markets/pharm-fresh", Group: MarketsGroup},
 }
 
+const (
+	browserlessTokenEnv = "BROWSERLESS_TOKEN"
+	browserlessURL      = "https://production-sfo.browserless.io"
+
+	// browserlessSessionTTL is how long Browserless keeps an unblocked browser
+	// alive (ms). A full run takes longer than this; when the session expires
+	// fetchDoc's next failure triggers a fresh unblock (see reconnect).
+	browserlessSessionTTL = 5 * 60 * 1000
+)
+
 // Scraper drives a headless browser to render and scrape dining.umich.edu pages.
 type Scraper struct {
 	pw      *playwright.Playwright
 	browser playwright.Browser
+	page    playwright.Page
+
+	// browserlessToken is empty when running a local Chromium.
+	browserlessToken string
 }
 
-// New starts a headless Chromium instance. Call Close when done.
-// Requires the Playwright browser binaries to be installed; if missing, run
+// New starts the browser the scraper renders pages with. Call Close when done.
+//
+// With BROWSERLESS_TOKEN set, it connects to a remote Browserless browser that
+// has already passed the Cloudflare challenge. Otherwise it launches a local
+// headless Chromium, which requires the Playwright browser binaries; if
+// missing, run
 // `go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps chromium`.
 func New() (*Scraper, error) {
 	pw, err := playwright.Run()
 	if err != nil {
 		return nil, fmt.Errorf("could not start playwright: %w", err)
 	}
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
+	s := &Scraper{pw: pw, browserlessToken: os.Getenv(browserlessTokenEnv)}
+	if s.browserlessToken != "" {
+		err = s.connectBrowserless()
+	} else {
+		err = s.launchLocal()
+	}
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Scraper) launchLocal() error {
+	browser, err := s.pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(true),
 	})
 	if err != nil {
-		pw.Stop()
-		return nil, fmt.Errorf("could not launch chromium: %w", err)
+		return fmt.Errorf("could not launch chromium: %w", err)
 	}
-	return &Scraper{pw: pw, browser: browser}, nil
+	s.browser = browser
+	context, err := browser.NewContext(playwright.BrowserNewContextOptions{
+		UserAgent: playwright.String(userAgent),
+	})
+	if err != nil {
+		return fmt.Errorf("could not create browser context: %w", err)
+	}
+	s.page, err = context.NewPage()
+	if err != nil {
+		return fmt.Errorf("could not open page: %w", err)
+	}
+	return nil
+}
+
+// connectBrowserless asks Browserless's /unblock endpoint to load the site and
+// solve its Cloudflare challenge, then attaches to that browser session and
+// reuses its already-cleared page.
+func (s *Scraper) connectBrowserless() error {
+	glog.Infof("Unblocking %s via Browserless", baseURL)
+	body, err := json.Marshal(map[string]interface{}{
+		"url":               baseURL,
+		"browserWSEndpoint": true,
+		"ttl":               browserlessSessionTTL,
+		"content":           false,
+		"cookies":           false,
+		"screenshot":        false,
+	})
+	if err != nil {
+		return err
+	}
+	endpoint := browserlessURL + "/unblock?proxy=residential&token=" + url.QueryEscape(s.browserlessToken)
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(body))
+	if err != nil {
+		// Don't wrap err: *url.Error includes the request URL, token and all.
+		return fmt.Errorf("browserless unblock request failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("browserless unblock returned status %d", resp.StatusCode)
+	}
+	var result struct {
+		BrowserWSEndpoint string `json:"browserWSEndpoint"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("could not decode browserless unblock response: %w", err)
+	}
+	if result.BrowserWSEndpoint == "" {
+		return fmt.Errorf("browserless unblock response had no browserWSEndpoint")
+	}
+
+	browser, err := s.pw.Chromium.ConnectOverCDP(result.BrowserWSEndpoint + "?token=" + url.QueryEscape(s.browserlessToken))
+	if err != nil {
+		return fmt.Errorf("could not connect to browserless session: %w", err)
+	}
+	s.browser = browser
+	contexts := browser.Contexts()
+	if len(contexts) == 0 || len(contexts[0].Pages()) == 0 {
+		return fmt.Errorf("browserless session has no open page")
+	}
+	s.page = contexts[0].Pages()[0]
+	return nil
+}
+
+// reconnect replaces an expired or re-challenged Browserless session with a
+// freshly unblocked one. It's a no-op for a local browser.
+func (s *Scraper) reconnect() {
+	if s.browserlessToken == "" {
+		return
+	}
+	if s.browser != nil {
+		s.browser.Close()
+		s.browser = nil
+	}
+	s.page = nil
+	if err := s.connectBrowserless(); err != nil {
+		glog.Errorf("Could not reconnect to Browserless: %s", err)
+	}
 }
 
 func (s *Scraper) Close() {
@@ -120,18 +238,6 @@ const numDaysToFetch = 7
 // DayHour per day scraped) plus every day's menus (one per location per
 // meal period per day).
 func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
-	context, err := s.browser.NewContext(playwright.BrowserNewContextOptions{
-		UserAgent: playwright.String(userAgent),
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("could not create browser context: %w", err)
-	}
-	defer context.Close()
-	page, err := context.NewPage()
-	if err != nil {
-		return nil, nil, fmt.Errorf("could not open page: %w", err)
-	}
-
 	dates := make([]time.Time, numDaysToFetch)
 	for i := range dates {
 		dates[i] = date.Now().AddDate(0, 0, i)
@@ -150,7 +256,7 @@ func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 			formattedDate := day.Format("Monday, January 2, 2006")
 			url := baseURL + loc.URLPath + "/?menuDate=" + dateStr
 
-			doc, err := fetchDoc(page, url)
+			doc, err := s.fetchDoc(url)
 			if err != nil {
 				glog.Errorf("Giving up on %s: %s", url, err)
 			} else if pageName := strings.TrimSpace(strings.SplitN(doc.Find("title").First().Text(), "|", 2)[0]); pageName == "" {
@@ -195,14 +301,22 @@ func (s *Scraper) FetchAll() (*pb.DiningHalls, []*pb.Menu, error) {
 const maxFetchAttempts = 3
 
 // fetchDoc loads url and returns its rendered HTML as a parsed document,
-// retrying transient failures (timeouts, non-200s, unparsable content).
-func fetchDoc(page playwright.Page, url string) (*goquery.Document, error) {
+// retrying transient failures (timeouts, non-200s, unparsable content). With
+// Browserless, a failure usually means the session expired or Cloudflare
+// challenged again, so each retry starts from a freshly unblocked session.
+func (s *Scraper) fetchDoc(url string) (*goquery.Document, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxFetchAttempts; attempt++ {
 		if attempt > 1 {
 			glog.Warningf("Retrying %s (attempt %d/%d) after: %s", url, attempt, maxFetchAttempts, lastErr)
 			time.Sleep(time.Duration(attempt) * time.Second)
+			s.reconnect()
 		}
+		if s.page == nil {
+			lastErr = fmt.Errorf("no browser page available")
+			continue
+		}
+		page := s.page
 		glog.Infof("Scraping %s", url)
 		resp, err := page.Goto(url, playwright.PageGotoOptions{
 			WaitUntil: playwright.WaitUntilStateDomcontentloaded,

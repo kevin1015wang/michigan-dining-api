@@ -20,6 +20,9 @@ services:
     environment:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      # Solves dining.umich.edu's Cloudflare Turnstile via Browserless. Leave
+      # unset to fall back to a local headless Chromium.
+      - BROWSERLESS_TOKEN=${BROWSERLESS_TOKEN}
 
   caddy:
     image: caddy:2-alpine
