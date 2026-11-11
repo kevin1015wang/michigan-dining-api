@@ -77,6 +77,7 @@ var Locations = []Location{
 	{URLPath: "cafes/taubman-health-sciences-library", Group: CafesGroup},
 	{URLPath: "cafes/umma-cafe", Group: CafesGroup},
 	{URLPath: "markets/blue-market-and-cafe/mosher-jordan", Group: MarketsGroup},
+	{URLPath: "markets/blue-market-and-cafe/wolverine-village", Group: MarketsGroup},
 	{URLPath: "markets/blue-market/bursley", Group: MarketsGroup},
 	{URLPath: "markets/blue-market/michigan-union", Group: MarketsGroup},
 	{URLPath: "markets/blue-market/munger", Group: MarketsGroup},
